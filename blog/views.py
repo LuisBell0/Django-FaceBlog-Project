@@ -45,6 +45,19 @@ def logout_view(request):
   return HttpResponseRedirect(reverse("new_login"))
 
 
+def handle_search(request):
+  search_input = request.POST.get('search-profile', '').strip()
+  redirect_url = request.POST.get('redirect_url', 'dashboard/')
+
+  if request.method == 'POST':
+    if "/" in search_input:
+      messages.error(request, "You cannot search for '/'.")
+    elif not search_input:
+      messages.error(request, "You cannot search for nothing.")
+    else:
+      return redirect(f'{reverse("search-profile")}?q={search_input}')
+    return redirect(redirect_url)
+
 @profile_required
 def home(request):
   current_user = request.user
@@ -55,21 +68,13 @@ def home(request):
     posts = Post.objects.filter(owner__profile__in=all_users).order_by('-posted_date')
     liked_post = LikePost.objects.filter(user=request.user,
                                          post__in=posts).values_list('post_id', flat=True)
-    if request.method == "POST":
-      search_input = request.POST.get('search-profile')
-      if "/" in search_input:
-        messages.error(request, "You cannot search for '/'.")
-      elif not search_input:
-        messages.error(request, "You cannot search for nothing.")
-      else:
-        return redirect('search-profile', search_input=search_input)
+
     context = {'posts': posts,
                'liked': liked_post
               }
     return render(request, 'blog/home.html', context)
   else:
     return login_view(request)
-
 
 
 @profile_required
@@ -84,17 +89,10 @@ def dashboard(request):
   posts = Post.objects.filter(owner=request.user)
   liked_post = LikePost.objects.filter(user=request.user,
                                        post__in=posts).values_list('post_id', flat=True)
-  if request.method == "POST":
-    search_input = request.POST.get('search-profile').strip()
-    if "/" in search_input:
-      messages.error(request, "You cannot search for '/'.")
-    elif not search_input:
-      messages.error(request, "You cannot search for nothing.")
-    else:
-      return redirect('search-profile', search_input=search_input)
+
   context = {'posts': posts,
              'liked': liked_post,
-             'followers':followers,
+             'followers': followers,
              'following': following}
   return render(request, 'blog/dashboard.html', context)
 
@@ -102,22 +100,19 @@ def dashboard(request):
 @method_decorator(profile_required, name='dispatch')
 class PostCreateView(CreateView):
   model = Post
-  fields = ['title', 'description', 'img']
-  success_url = reverse_lazy('dashboard')
+  fields = ['description', 'img']
+  success_url = reverse_lazy('home')
 
   # Override form_valid to link the post to the user
   # And save the date and time the post is being created
   def form_valid(self, form):
     form.instance.owner = self.request.user
-    form.instance.posted_hour_server = datetime.now().time()
 
     # Retrieve user timezone from request
     user_timezone = self.request.POST.get('timezone')
     if user_timezone:
-      # Use the user's timezone to set posted_hour_client
-      user_time = datetime.now(pytz.timezone(user_timezone)).time()
+      # Use the user's timezone to set posted_date
       user_date = datetime.now(pytz.timezone(user_timezone)).date()
-      form.instance.posted_hour_client = user_time
       form.instance.posted_date = user_date
 
     return super().form_valid(form)
@@ -126,7 +121,7 @@ class PostCreateView(CreateView):
 @method_decorator(profile_required, name='dispatch')
 class PostUpdateView(UpdateView):
   model = Post
-  fields = ['title', 'description', 'img']
+  fields = ['description', 'img']
   success_url = reverse_lazy("dashboard")
   template_name = "blog/post_update_form.html"
 
@@ -157,30 +152,9 @@ def comment_delete_function(request, post_id, comment_id):
   comment = get_object_or_404(Comment, post=post, id=comment_id)
   if request.method == 'POST':
     comment.delete()
-    return redirect('comments', post_id)
-  else:
-    context = {'post': post, 'comment': comment}
-    return render(request, 'blog/comment_delete_view.html', context)
-
-
-@profile_required
-@login_required
-def comment_update_function(request, post_id, comment_id):
-  post = get_object_or_404(Post, id=post_id)
-  comment = get_object_or_404(Comment, id=comment_id, post=post)
-  if request.method == 'POST':
-    comment_form = AddCommentForm(instance=comment, data=request.POST)
-    if comment_form.is_valid():
-      comment_form.save()
-    return redirect('comments', post_id)
-  else:
-    comment_form = AddCommentForm(instance=comment)
-    context = {
-        'comment': comment,
-        'comment_form': comment_form,
-        'post': post,
-    }
-    return render(request, 'blog/comment_update_view.html', context)
+    post.comments_count = post.comments_count - 1
+    post.save()
+  return redirect('comments', post_id)
 
 
 @profile_required
@@ -204,6 +178,8 @@ def post_comments_list(request, post_id):
       comment = add_comment_form.save(commit=False)
       comment.user = request.user
       comment.post = post
+      post.comments_count = post.comments_count + 1
+      post.save()
       comment.save()
     return redirect('comments', post_id)
   else:
@@ -230,6 +206,8 @@ def add_comment_reply(request, post_id, comment_id):
       reply.user = request.user
       reply.post = post
       reply.parent_comment = comment
+      post.comments_count = post.comments_count + 1
+      post.save()
       reply.save()
     return redirect('comments', post_id)
   else:
@@ -241,7 +219,7 @@ def add_comment_reply(request, post_id, comment_id):
     }
   return render(request, 'blog/add_reply_form.html', context)
 
-  
+
 @profile_required
 @login_required
 def like_post_view(request, pk):
@@ -322,18 +300,22 @@ def ProfileUpdateFunction(request, pk):
 
 @profile_required
 @login_required
-def search_profile(request, search_input):
-  profiles = Profile.objects.filter(user__username__startswith=search_input)
+def search_profile(request):
+  search_input = request.GET.get('q', '').strip()
+  profiles_found = Profile.objects.filter(user__username__startswith=search_input)
   return render(request, 'blog/search_profile.html', {
-      'profiles': profiles,
+      'profiles_found': profiles_found,
       'search': search_input
   })
 
 
 @profile_required
 def external_user_profile_view(request, user_username):
-  external_user = get_object_or_404(User, username=user_username)
-  profile = get_object_or_404(Profile, user=external_user)
+  try:
+    external_user = User.objects.get(username=user_username)
+    profile = Profile.objects.get(user=external_user)
+  except (User.DoesNotExist, Profile.DoesNotExist):
+    return render(request, 'blog/non_existent_user_or_page.html', {})
   posts = Post.objects.filter(owner=external_user)
   followers = profile.followed_by.exclude(pk=profile.pk)
   following = profile.follows.exclude(pk=profile.pk)
@@ -351,7 +333,7 @@ def external_user_profile_view(request, user_username):
     'posts': posts,
     'liked': liked_post,
     'profile': profile,
-    'followers':followers,
+    'followers': followers,
     'following': following,
     'is_follower': is_follower
   }
@@ -374,7 +356,7 @@ def follow_unfollow_profile(request, profile_id):
 def followers_list_view(request, user_username):
   user = get_object_or_404(User, username=user_username)
   profile = get_object_or_404(Profile, user=user)
-  followers = profile.follows.exclude(pk=profile.id)
+  followers = profile.followed_by.exclude(pk=profile.id)
   context = {
     'user':user,
     'profile':profile,
@@ -388,11 +370,10 @@ def followers_list_view(request, user_username):
 def following_list_view(request, user_username):
   user = get_object_or_404(User, username=user_username)
   profile = get_object_or_404(Profile, user=user)
-  following = profile.followed_by.exclude(pk=profile.id)
+  following = profile.follows.exclude(pk=profile.id)
   context = {
     'user':user,
     'profile':profile,
     'following':following
   }
   return render(request, 'blog/profile_following_list.html', context)
-  
