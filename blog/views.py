@@ -9,7 +9,7 @@ from django.views.generic import CreateView, DeleteView, UpdateView
 from django.urls import reverse_lazy
 from datetime import datetime
 import pytz
-from .forms import ProfileUpdateForm, UserUpdateForm, LoginForm, AddCommentForm
+from .forms import ProfileUpdateForm, UserUpdateForm, LoginForm, AddCommentForm, EditPostForm
 from .decorators import profile_required
 
 # Create your views here.
@@ -47,7 +47,7 @@ def logout_view(request):
 
 def handle_search(request):
   search_input = request.POST.get('search-profile', '').strip()
-  redirect_url = request.POST.get('redirect_url', 'dashboard/')
+  redirect_url = request.POST.get('redirect_url', f'user-profile/{request.user}')
 
   if request.method == 'POST':
     if "/" in search_input:
@@ -58,6 +58,7 @@ def handle_search(request):
       return redirect(f'{reverse("search-profile")}?q={search_input}')
     return redirect(redirect_url)
 
+
 @profile_required
 def home(request):
   current_user = request.user
@@ -65,36 +66,16 @@ def home(request):
     current_user_profile = Profile.objects.filter(user=current_user)
     followed_users = current_user.profile.follows.all()
     all_users = followed_users | current_user_profile
-    posts = Post.objects.filter(owner__profile__in=all_users).order_by('-posted_date')
+    posts = Post.objects.filter(
+        owner__profile__in=all_users).order_by('-posted_date')
     liked_post = LikePost.objects.filter(user=request.user,
-                                         post__in=posts).values_list('post_id', flat=True)
+                                         post__in=posts).values_list('post_id',
+                                                                     flat=True)
 
-    context = {'posts': posts,
-               'liked': liked_post
-              }
+    context = {'posts': posts, 'liked': liked_post}
     return render(request, 'blog/home.html', context)
   else:
     return login_view(request)
-
-
-@profile_required
-@login_required
-def dashboard(request):
-  try:
-    user_profile = Profile.objects.get(user=request.user)
-  except Profile.DoesNotExist:
-    return redirect("profile-create")
-  followers = user_profile.followed_by.exclude(pk=user_profile.pk)
-  following = user_profile.follows.exclude(pk=user_profile.pk)
-  posts = Post.objects.filter(owner=request.user)
-  liked_post = LikePost.objects.filter(user=request.user,
-                                       post__in=posts).values_list('post_id', flat=True)
-
-  context = {'posts': posts,
-             'liked': liked_post,
-             'followers': followers,
-             'following': following}
-  return render(request, 'blog/dashboard.html', context)
 
 
 @method_decorator(profile_required, name='dispatch')
@@ -121,21 +102,31 @@ class PostCreateView(CreateView):
 @method_decorator(profile_required, name='dispatch')
 class PostUpdateView(UpdateView):
   model = Post
-  fields = ['description', 'img']
-  success_url = reverse_lazy("dashboard")
-  template_name = "blog/post_update_form.html"
+  fields = ['description']
+
+  def form_valid(self, form):
+    self.request.session['previous_url'] = self.request.META.get('HTTP_REFERER')
+    return super().form_valid(form)
+  
+  def get_success_url(self):
+    previous_url = self.request.session.get('previous_url')
+    if previous_url:
+        return previous_url
+    return reverse_lazy("user-profile", kwargs={'username': self.request.user.username})
 
 
 @method_decorator(profile_required, name='dispatch')
 class PostDeleteView(DeleteView):
   model = Post
-  success_url = reverse_lazy('dashboard')
+  def get_success_url(self):
+    return reverse_lazy("user-profile", kwargs={'user_username': self.request.user.username})
 
 
 class ProfileCreateView(CreateView):
   model = Profile
   fields = ['gender', 'date_of_birth', 'bio', 'profile_picture']
-  success_url = reverse_lazy("dashboard")
+  def get_success_url(self):
+    return reverse_lazy("user-profile", kwargs={'user_username': self.request.user.username})
 
   def form_valid(self, form):
     form.instance.user = self.request.user
@@ -184,12 +175,14 @@ def post_comments_list(request, post_id):
     return redirect('comments', post_id)
   else:
     add_comment_form = AddCommentForm()
+    edit_post_form = EditPostForm(instance=post)
     context = {
-        'post': post,
-        'comments': comments,
-        'liked_post': liked_post,
-        'liked_comment': liked_comment,
-        'comment_form': add_comment_form,
+      'post': post,
+      'comments': comments,
+      'liked_post': liked_post,
+      'liked_comment': liked_comment,
+      'comment_form': add_comment_form,
+      'edit_post_form': edit_post_form,
     }
   return render(request, 'blog/post_comments_view.html', context)
 
@@ -281,7 +274,7 @@ def ProfileUpdateFunction(request, pk):
 
         user_form.save()
         profile_form.save()
-        return HttpResponseRedirect(reverse("dashboard"))
+        return HttpResponseRedirect(reverse("user-profile", args=[request.user]))
     else:
       # Form is not valid, reload the page
       return render(request, 'blog/profile_update.html', {
@@ -302,42 +295,12 @@ def ProfileUpdateFunction(request, pk):
 @login_required
 def search_profile(request):
   search_input = request.GET.get('q', '').strip()
-  profiles_found = Profile.objects.filter(user__username__startswith=search_input)
+  profiles_found = Profile.objects.filter(
+      user__username__startswith=search_input)
   return render(request, 'blog/search_profile.html', {
       'profiles_found': profiles_found,
       'search': search_input
   })
-
-
-@profile_required
-def external_user_profile_view(request, user_username):
-  try:
-    external_user = User.objects.get(username=user_username)
-    profile = Profile.objects.get(user=external_user)
-  except (User.DoesNotExist, Profile.DoesNotExist):
-    return render(request, 'blog/non_existent_user_or_page.html', {})
-  posts = Post.objects.filter(owner=external_user)
-  followers = profile.followed_by.exclude(pk=profile.pk)
-  following = profile.follows.exclude(pk=profile.pk)
-  if request.user.is_authenticated:
-    is_follower = request.user.profile.follows.filter(id=profile.id).exists()
-    liked_post = LikePost.objects.filter(user=request.user,
-       post__in=posts).values_list('post_id',
-                                   flat=True)
-  else:
-    is_follower = None
-    liked_post = None
-  context = {
-    'external_user': external_user,
-    'user_input': user_username,
-    'posts': posts,
-    'liked': liked_post,
-    'profile': profile,
-    'followers': followers,
-    'following': following,
-    'is_follower': is_follower
-  }
-  return render(request, 'blog/external_user_profile.html', context)
 
 
 @profile_required
@@ -352,28 +315,40 @@ def follow_unfollow_profile(request, profile_id):
 
 
 @profile_required
-@login_required
-def followers_list_view(request, user_username):
-  user = get_object_or_404(User, username=user_username)
-  profile = get_object_or_404(Profile, user=user)
-  followers = profile.followed_by.exclude(pk=profile.id)
-  context = {
-    'user':user,
-    'profile':profile,
-    'followers':followers
-  }
-  return render(request, 'blog/profile_followers_list.html', context)
+def user_profile_view(request, user_username):
+  try:
+    search_user = User.objects.get(username=user_username)
+    profile = Profile.objects.get(user=search_user)
+  except Profile.DoesNotExist:
+    return redirect("profile-create")
+  followers = profile.followed_by.exclude(pk=profile.pk)
+  following = profile.follows.exclude(pk=profile.pk)
+  posts = Post.objects.filter(owner=search_user).order_by('-posted_date')
+  img_posts = Post.objects.filter(owner=search_user).exclude(img='').exclude(
+      img__isnull=True).order_by('-posted_date')
+  txt_posts = Post.objects.filter(
+      owner=search_user).filter(img__isnull=True).union(
+          Post.objects.filter(owner=search_user,
+                              img='')).order_by('-posted_date')
+  
+  if request.user.is_authenticated:
+    is_follower = request.user.profile.follows.filter(id=profile.id).exists()
+    liked_post = LikePost.objects.filter(user=request.user,
+                                         post__in=posts).values_list('post_id',
+                                                                     flat=True)
+  else:
+    is_follower = None
+    liked_post = None
 
-
-@profile_required
-@login_required
-def following_list_view(request, user_username):
-  user = get_object_or_404(User, username=user_username)
-  profile = get_object_or_404(Profile, user=user)
-  following = profile.follows.exclude(pk=profile.id)
   context = {
-    'user':user,
-    'profile':profile,
-    'following':following
+    'profile': profile,
+    'search_user': search_user,
+    'posts': posts,
+    'img_posts': img_posts,
+    'txt_posts': txt_posts,
+    'liked': liked_post,
+    'followers': followers,
+    'following': following,
+    'is_follower': is_follower,
   }
-  return render(request, 'blog/profile_following_list.html', context)
+  return render(request, 'blog/user_profile.html', context)

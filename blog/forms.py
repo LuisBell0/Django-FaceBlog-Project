@@ -1,13 +1,12 @@
 from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
-from django.forms import widgets
-from blog.models import Profile, Comment
+from blog.models import Profile, Comment, Post
 
 
 class SignUpForm(UserCreationForm):
     email = forms.EmailField(max_length=254)
-    username = forms.CharField(max_length=10)
+    username = forms.CharField(max_length=12)
 
     class Meta:
         model = User
@@ -21,9 +20,6 @@ class UserUpdateForm(forms.ModelForm):
         fields = [
             'first_name', 'last_name', 'email', 'username'
         ]
-        help_texts = {
-            'username': (""),
-        }
         
 class ProfileUpdateForm(forms.ModelForm):
     class Meta:
@@ -31,6 +27,11 @@ class ProfileUpdateForm(forms.ModelForm):
         fields = [
             'bio', 'gender', 'date_of_birth', 'profile_picture'
         ]
+        widgets = {
+            'date_of_birth': forms.DateInput(attrs={
+                'type': 'date',
+            })
+        }
 
 
 class LoginForm(forms.Form):
@@ -58,3 +59,9 @@ class AddCommentForm(forms.ModelForm):
         widget = {
             'text': forms.Textarea(attrs={'rows':4}),
         }
+
+
+class EditPostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ['description']
