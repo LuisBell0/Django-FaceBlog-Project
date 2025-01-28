@@ -50,31 +50,41 @@ const postsContainer = document.getElementById('postsContainer');
 const showTextsButton = document.getElementById('showTexts');
 const textsContainer = document.getElementById('textsContainer');
 
-function ShowOrHideContainers(button, secondButton, showContainer, hideContainer) {
-  button.addEventListener('click', () => {
-    button.classList.add('border-bottom-1', 'border-dark')
-    secondButton.classList.remove('border-bottom-1', 'border-dark')
+function ShowOrHideContainers(button, showContainer, hideContainer) {
+  button.addEventListener('click', () =>  {
     showContainer.style.setProperty('display', 'block', 'important');
     hideContainer.style.setProperty('display', 'none', 'important');
   });
 }
 
-if (showPostsButton) {
-  ShowOrHideContainers(showPostsButton, showTextsButton, postsContainer, textsContainer);
-  ShowOrHideContainers(showTextsButton, showPostsButton, textsContainer, postsContainer);
+function AlternateBodersForTwoButtons(button, secondButton) {
+  button.addEventListener('click', () => {
+    button.classList.add('border-bottom-1', 'border-dark')
+    secondButton.classList.remove('border-bottom-1', 'border-dark')
+  });
 }
 
-// POST UPDATE
+if (showPostsButton) {
+  ShowOrHideContainers(showPostsButton, postsContainer, textsContainer);
+  ShowOrHideContainers(showTextsButton, textsContainer, postsContainer);
+  AlternateBodersForTwoButtons(showPostsButton, showTextsButton);
+  AlternateBodersForTwoButtons(showTextsButton, showPostsButton);
+}
+
+// SHOW POST UPDATE
 const postUpdateButton = document.getElementById('postUpdateButton');
 const descriptionContainer = document.getElementById('descriptionContainer');
 const formTemplate = document.getElementById('postUpdateForm');
 const descriptionViewTemplate = document.getElementById('descriptionViewTemplate');
+const likeContainer = document.getElementById('likeContainer');
 
 if (postUpdateButton) {
   postUpdateButton.addEventListener('click', () => {
     const formClone = document.importNode(formTemplate.content, true);
     descriptionContainer.innerHTML = '';
     descriptionContainer.appendChild(formClone);
+    likeContainer.classList.remove('d-flex');
+    likeContainer.classList.add('d-none')
   
     const cancelPostUpdateButton = descriptionContainer.querySelector('#cancelPostUpdateButton');
   
@@ -84,6 +94,48 @@ if (postUpdateButton) {
       const descriptionClone = document.importNode(descriptionViewTemplate.content, true);
       descriptionContainer.innerHTML = '';
       descriptionContainer.appendChild(descriptionClone);
+      likeContainer.classList.remove('d-none');
+      likeContainer.classList.add('d-flex')
     });
   });
 }
+
+// TIMEOUT FOR REPORT MESSAGE
+document.addEventListener("DOMContentLoaded", function() {
+    const reportMessageContainer = document.getElementById('reportMessageContainer')
+    if (reportMessageContainer) {
+        setTimeout(function() {
+          reportMessageContainer.style.display = 'none';
+        }, 5000);
+    }
+});
+
+// MATCH COMMENT CONTAINER SIZE WITH IMAGE SIZE
+window.addEventListener('load', function() {
+    const commentsContainer = document.querySelector('.comments-container');
+    const postImage = document.querySelector('.post-image');
+    if (commentsContainer) {
+        if (postImage) {
+            function adjustHeights() {
+                if (window.innerWidth >= 992) {
+                    if (postImage) {
+                        const imageHeight = postImage.clientHeight;
+                        commentsContainer.style.maxHeight = imageHeight + 'px';
+                    }
+                } else {
+                    commentsContainer.style.maxHeight = '';
+                }
+            }
+
+            if (postImage.complete) {
+                adjustHeights();
+            } else {
+                postImage.addEventListener('load', adjustHeights);
+            }
+
+            window.addEventListener('resize', adjustHeights);
+        } else {
+            commentsContainer.style.maxHeight = '500px';
+        }
+    }
+});

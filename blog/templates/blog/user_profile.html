@@ -1,5 +1,6 @@
 {% extends 'blog/_base.html'%}
 {% load static %}
+{% load form_tags %}
 {% block content%}
 <!-- FOLLOWERS AND FOLLOWING MODAL -->
 {% include 'blog/profile_followers_and_following_modal.html' %}
@@ -31,7 +32,7 @@
         <div class="position-absolute top-0 end-0 d-md-none">
           {% if request.user.username == search_user.username %}
             <div class="d-flex flex-column align-items-center">
-              <a class="text-dark" href="{% url 'profile-update' search_user.profile.pk %}" method="GET">
+              <a class="text-dark" href="{% url 'profile-update' search_user.profile.pk %}">
                 <i class="bi bi-gear-fill font-lg text-dark"></i>
               </a>
               <span id="edit-profile-text" class="font-xssss">Edit Profile</span>
@@ -80,9 +81,10 @@
               <div class="d-md-none mt-2">
                 <form action="{% url 'follow-unfollow' profile.id %}" method="POST">
                   {% csrf_token %}
-                  <button class="btn py-1 px-5 bg-greylight rounded" type="submit">
+                  <button class="btn d-flex align-items-center py-1 px-5 bg-greylight rounded" type="submit">
                     {% if is_follower %}
-                      Unfollow
+                      Following
+                      <i class="bi bi-check-lg font-sm"></i>
                     {% else %}
                       Follow
                     {% endif %}
@@ -92,16 +94,17 @@
             {% endif %}
             <div class="d-none d-md-flex flex-md-column align-items-md-center">
               {% if request.user.username == search_user.username %}
-                <a class="text-dark" href="{% url 'profile-update' profile.pk %}" method="GET">
+                <a class="text-dark" href="{% url 'profile-update' profile.pk %}">
                   <i class="bi bi-gear-fill font-lg text-dark"></i>
                 </a>
                 <span id="edit-profile-text" class="font-xssss">Edit Profile</span>
               {% else %}
               <form action="{% url 'follow-unfollow' profile.id %}" method="POST">
                 {% csrf_token %}
-                <button class="btn py-1 px-2 bg-greylight rounded" type="submit">
+                <button class="btn d-flex align-items-center py-1 px-2 bg-greylight bg-hover-grey rounded" type="submit">
                   {% if is_follower %}
-                    Unfollow
+                    Following
+                    <i class="bi bi-check-lg font-sm"></i>
                   {% else %}
                     Follow
                   {% endif %}
@@ -140,7 +143,7 @@
                 <div class="ratio ratio-1x1">
                   <a href="{% url 'comments' post.id %}">
                     {% if post.img %}
-                      <img class="img-fluid w-100 h-100" src="{{ post.img.url }}" alt="{{ post.title }}" style="object-fit: cover;">
+                      <img class="img-fluid w-100 h-100" src="{{ post.img.url }}" alt="{{ post.title }}">
                     {% else %}
                       <div class="d-flex justify-content-center align-items-center h-100">
                         <span>No Image Available</span>
@@ -187,7 +190,7 @@
                     {{post.owner}}
                   </a>
                   <span class="d-block font-xssss fw-500 mt-1 lh-3 text-grey-500 text-nowrap">
-                    {{ post.posted_date|timesince }} ago
+                    {{ post.posted_date|time_filter }}
                   </span>
                 </h4>
                 {% if request.user == search_user %}
@@ -199,11 +202,6 @@
                         <i class="bi bi-three-dots text-dark font-sm"></i>
                       </a>
                       <ul class="dropdown-menu p-0">
-                        <a class="btn w-100 text-start text-success"
-                          href="{% url 'post-update' post.id %}">
-                          Edit Post
-                        </a>
-                        <hr class="m-0">
                         <a class="btn w-100 text-start text-danger deletePost"
                           data-bs-toggle="modal" 
                           data-bs-target="#deleteModal"
@@ -230,22 +228,13 @@
               <div class="card-body d-flex p-0">
                 <a href="{% url 'post-like' post.pk%}" class="d-flex align-items-center fw-600 
                   text-grey-900 lh-26 font-xssss me-2">
-                  {% if post.id in liked %}
-                    <i class="bi bi-heart-fill color-red me-1 btn-round-sm font-lg"></i> 
-                  {% else %}
-                    <i class="bi bi-heart text-black me-1 btn-round-sm font-lg"></i> 
-                  {% endif%}
+                    <i class="{% if post.id in liked %} bi bi-heart-fill color-red {% else %} bi bi-heart text-black {% endif%} text-start btn-round-sm font-lg"></i>
                   {{ post.likes_count }} Like
                 </a>
                 <a href="{% url 'comments' post.id %}" class="d-flex align-items-center fw-600 
                   text-grey-900 lh-26 font-xssss">
                   <i class="bi bi-chat text-dark text-grey-900 btn-round-sm font-lg"></i>
                   <span>{{ post.comments_count }} Comments</span>
-                </a>
-                <a href="#" class="ms-auto d-flex align-items-center 
-                  fw-600 text-grey-900 lh-26 font-xssss">
-                  <i class="bi bi-share text-grey-900 text-dark btn-round-sm font-lg"></i>
-                  <span>Share</span>
                 </a>
               </div>
             </div>

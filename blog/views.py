@@ -1,21 +1,29 @@
 from django.shortcuts import get_object_or_404, render, HttpResponseRedirect, reverse, redirect
 from django.contrib import messages
-from django.contrib.auth import authenticate, login, logout
-from .models import Post, Profile, LikePost, Comment, LikeComment
+from django.contrib.auth import authenticate, login
+from .models import Post, Profile, LikePost, Comment, LikeComment, ReportProblem, Notification
 from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 from django.views.generic import CreateView, DeleteView, UpdateView
 from django.urls import reverse_lazy
 from datetime import datetime
 import pytz
-from .forms import ProfileUpdateForm, UserUpdateForm, LoginForm, AddCommentForm, EditPostForm
+from .forms import ProfileUpdateForm, UserUpdateForm, LoginForm, AddCommentForm, EditPostForm, ReportProblemForm
 from .decorators import profile_required
+from django.core.mail import EmailMessage
+from django.utils import timezone
+from django.http import JsonResponse
+from django.core.paginator import Paginator
 
 # Create your views here.
 
 
 def login_view(request):
+  if request.user.is_authenticated:
+    return HttpResponseRedirect(reverse("home"))
+
   if request.method == 'POST':
     form = LoginForm(data=request.POST)
     if form.is_valid():
@@ -40,11 +48,8 @@ def login_view(request):
   return render(request, 'registration/login.html', {'login_form': form})
 
 
-def logout_view(request):
-  logout(request)
-  return HttpResponseRedirect(reverse("new_login"))
-
-
+@profile_required
+@login_required()
 def handle_search(request):
   search_input = request.POST.get('search-profile', '').strip()
   redirect_url = request.POST.get('redirect_url', f'user-profile/{request.user}')
@@ -60,22 +65,33 @@ def handle_search(request):
 
 
 @profile_required
+@login_required()
 def home(request):
   current_user = request.user
-  if current_user.is_authenticated:
-    current_user_profile = Profile.objects.filter(user=current_user)
-    followed_users = current_user.profile.follows.all()
-    all_users = followed_users | current_user_profile
-    posts = Post.objects.filter(
-        owner__profile__in=all_users).order_by('-posted_date')
-    liked_post = LikePost.objects.filter(user=request.user,
-                                         post__in=posts).values_list('post_id',
-                                                                     flat=True)
+  current_user_profile = Profile.objects.get(user=current_user)
+  followed_users = current_user.profile.follows.all()
+  all_users = followed_users | Profile.objects.filter(user=current_user)
+  posts = Post.objects.filter(
+      owner__profile__in=all_users).order_by('-posted_date')
+  paginator = Paginator(posts, 5)
+  page = request.GET.get('page')
+  posts_paginator = paginator.get_page(page)
+  liked_post = LikePost.objects.filter(user=current_user,
+                                       post__in=posts).values_list('post_id',
+                                                                   flat=True)
+  random_profiles = Profile.objects.exclude(
+      pk__in=current_user_profile.follows.values_list('pk', flat=True)
+  ).order_by('?')[:4]
+  report_problem_form = ReportProblemForm()
+  notifications = Notification.objects.filter(receiver=current_user, is_read=False).order_by('-created_at')
 
-    context = {'posts': posts, 'liked': liked_post}
-    return render(request, 'blog/home.html', context)
-  else:
-    return login_view(request)
+  context = {'posts': posts_paginator,
+             'liked': liked_post,
+             'random_profiles': random_profiles,
+             'report_problem_form': ReportProblemForm,
+             'notifications': notifications,
+             }
+  return render(request, 'blog/home.html', context)
 
 
 @method_decorator(profile_required, name='dispatch')
@@ -136,12 +152,20 @@ class ProfileCreateView(CreateView):
     return response
 
 
+@method_decorator([login_required, profile_required], name='dispatch')
+class UserDeleteView(DeleteView):
+  model = User
+  success_url = reverse_lazy('login')
+    
+
 @profile_required
 @login_required
 def comment_delete_function(request, post_id, comment_id):
   post = get_object_or_404(Post, id=post_id)
   comment = get_object_or_404(Comment, post=post, id=comment_id)
+  replies = Comment.objects.filter(post=post, parent_comment=comment).count()
   if request.method == 'POST':
+    post.comments_count -= replies
     comment.delete()
     post.comments_count = post.comments_count - 1
     post.save()
@@ -172,6 +196,8 @@ def post_comments_list(request, post_id):
       post.comments_count = post.comments_count + 1
       post.save()
       comment.save()
+      content_type = ContentType.objects.get_for_model(Comment)
+      Notification.send_notification(sender=request.user, receiver=post.owner, content_type=content_type, object_id=comment.id, notification_type='comment_post')
     return redirect('comments', post_id)
   else:
     add_comment_form = AddCommentForm()
@@ -202,15 +228,9 @@ def add_comment_reply(request, post_id, comment_id):
       post.comments_count = post.comments_count + 1
       post.save()
       reply.save()
+      content_type = ContentType.objects.get_for_model(Comment)
+      Notification.send_notification(sender=request.user, receiver=comment.user,content_type=content_type, object_id=comment.id, notification_type='comment_reply')
     return redirect('comments', post_id)
-  else:
-    reply_form = AddCommentForm()
-    context = {
-        'post': post,
-        'comment': comment,
-        'reply_form': reply_form,
-    }
-  return render(request, 'blog/add_reply_form.html', context)
 
 
 @profile_required
@@ -221,6 +241,8 @@ def like_post_view(request, pk):
   if not liked_post:
     liked_post = LikePost.objects.create(post=post, user=request.user)
     post.likes_count = post.likes_count + 1
+    content_type = ContentType.objects.get_for_model(post)
+    Notification.send_notification(sender=request.user, receiver=post.owner, content_type=content_type, object_id=post.id, notification_type='like_post')
   else:
     liked_post.delete()
     post.likes_count = post.likes_count - 1
@@ -238,6 +260,8 @@ def like_comment_view(request, comment_id):
     liked_comment = LikeComment.objects.create(comment=comment,
                                                user=request.user)
     comment.likes_count = comment.likes_count + 1
+    content_type = ContentType.objects.get_for_model(comment)
+    Notification.send_notification(sender=request.user, receiver=comment.user, content_type=content_type, object_id=comment.id, notification_type='like_comment')
   else:
     liked_comment.delete()
     comment.likes_count = comment.likes_count - 1
@@ -311,6 +335,8 @@ def follow_unfollow_profile(request, profile_id):
     request.user.profile.follows.remove(profile)
   else:
     request.user.profile.follows.add(profile)
+    content_type = ContentType.objects.get_for_model(profile)
+    Notification.send_notification(sender=request.user, receiver=profile.user, content_type=content_type, object_id=profile.id, notification_type='follow')
   return redirect(request.META.get('HTTP_REFERER'))
 
 
@@ -319,6 +345,8 @@ def user_profile_view(request, user_username):
   try:
     search_user = User.objects.get(username=user_username)
     profile = Profile.objects.get(user=search_user)
+  except User.DoesNotExist:
+    return redirect("login")
   except Profile.DoesNotExist:
     return redirect("profile-create")
   followers = profile.followed_by.exclude(pk=profile.pk)
@@ -352,3 +380,63 @@ def user_profile_view(request, user_username):
     'is_follower': is_follower,
   }
   return render(request, 'blog/user_profile.html', context)
+
+
+@profile_required
+@login_required()
+def report_problem(request, user_username):
+  if request.method == 'POST':
+    report_problem_form = ReportProblemForm(request.POST)
+
+    if report_problem_form.is_valid():
+      time_limit = timezone.now() - timezone.timedelta(days=1)
+      report_count = ReportProblem.objects.filter(user=request.user, submitted_at__gte=time_limit).count()
+
+      if report_count >= 3:
+        messages.error(request, "You can only submit 3 reports in a 24-hour period.")
+        return redirect('home')
+
+      problem_description = report_problem_form.cleaned_data['problem_description']
+      report = ReportProblem(user=request.user, description=problem_description)
+      report.save()
+
+      subject = f'FaceBlog problem report from {user_username}'
+      message = f'Problem description:\n{problem_description}\n\n'
+      email = EmailMessage(subject, message, to=['eadluisbello2023@gmail.com'])
+      email.send()
+
+      messages.success(request, 'Your report has been submitted. Thank you for help us improve FaceBlog!')
+      return HttpResponseRedirect(reverse('home'))
+
+
+@profile_required
+@login_required()
+def notifications_view(request):
+
+  notifications = Notification.objects.filter(receiver=request.user).order_by('-created_at')
+  not_read_notifications = Notification.objects.filter(receiver=request.user, is_read=False)
+  context = {
+    'notifications': notifications,
+    'not_read_notifications': not_read_notifications,
+  }
+  return render(request, 'blog/notifications_view.html', context)
+
+
+@profile_required
+@login_required()
+def mark_as_read(request, notification_id):
+  notification = get_object_or_404(Notification, id=notification_id)
+  if not notification.is_read:
+    notification.is_read = True
+    notification.save()
+  return JsonResponse({'status': 'success'})
+
+
+@profile_required
+@login_required()
+def mark_all_as_read(request):
+  notifications = Notification.objects.filter(receiver=request.user)
+  for notification in notifications:
+    notification.is_read = True
+    notification.save()
+  return redirect('notifications')
